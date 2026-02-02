@@ -26,7 +26,14 @@ export default function Home() {
   const [winningBonds, setWinningBonds] = useState<WinningBond[]>([]);
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [isChecking, setIsChecking] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState({ myBonds: false, winningBonds: false });
+  const [uploadStatus, setUploadStatus] = useState({
+    myBonds: false,
+    winningBonds: false
+  });
+
+  // Track filenames and denominations
+  const [filenames, setFilenames] = useState({ myBonds: '', winningBonds: '' });
+  const [detectedDenom, setDetectedDenom] = useState<string>('N/A');
 
   // New state for previews
   const [showMyBondsPreview, setShowMyBondsPreview] = useState(false);
@@ -38,8 +45,29 @@ export default function Home() {
   const filteredMyBonds = myBonds.filter(b => b.number.includes(myBondsSearch));
   const filteredWinning = winningBonds.filter(b => b.number.includes(winningSearch));
 
+  // Export Results to CSV
+  const exportToCSV = () => {
+    if (matches.length === 0) return;
+
+    const csvContent = "data:text/csv;charset=utf-8,"
+      + "Bond Number,Prize,Denomination\n"
+      + matches.map(m => `${m.bondNumber},${m.prize},${m.denomination || detectedDenom}`).join("\n");
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `prize_winners_${new Date().toLocaleDateString()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // Parse Excel/CSV file
   const parseFile = async (file: File): Promise<string[]> => {
+    // Attempt to detect denomination from filename
+    const denomMatch = file.name.match(/\b(100|200|750|1500|7500|15000|25000|40000)\b/i);
+    if (denomMatch) setDetectedDenom(denomMatch[0]);
+
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
 
@@ -55,7 +83,11 @@ export default function Home() {
                 const numbers = results.data
                   .flat()
                   .filter((item: any) => item && String(item).trim())
-                  .map((item: any) => String(item).trim());
+                  .map((item: any) => {
+                    const str = String(item).trim();
+                    // Clean non-numeric characters if needed, but keep 6 digits
+                    return str.padStart(6, '0').slice(-6);
+                  });
                 resolve(numbers);
               },
               error: (error) => reject(error)
@@ -68,7 +100,10 @@ export default function Home() {
             const numbers = jsonData
               .flat()
               .filter((item: any) => item && String(item).trim())
-              .map((item: any) => String(item).trim());
+              .map((item: any) => {
+                const str = String(item).trim();
+                return str.padStart(6, '0').slice(-6);
+              });
             resolve(numbers);
           } else {
             reject(new Error('Unsupported file format'));
@@ -91,27 +126,21 @@ export default function Home() {
 
   // Extract 6-digit numbers from text
   const extract6DigitNumbers = (text: string): string[] => {
-    // Match all 6-digit numbers in the text
     const regex = /\b\d{6}\b/g;
     const matches = text.match(regex);
-    return matches ? [...new Set(matches)] : []; // Remove duplicates
+    return matches ? [...new Set(matches)] : [];
   };
 
-  // Parse text file for winning numbers
   const parseTextFile = async (file: File): Promise<string[]> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-
       reader.onload = (e) => {
         try {
           const text = e.target?.result as string;
           const numbers = extract6DigitNumbers(text);
           resolve(numbers);
-        } catch (error) {
-          reject(error);
-        }
+        } catch (error) { reject(error); }
       };
-
       reader.onerror = () => reject(new Error('File reading failed'));
       reader.readAsText(file);
     });
@@ -126,8 +155,9 @@ export default function Home() {
       const numbers = await parseFile(file);
       const bonds: PrizeBond[] = numbers.map(num => ({ number: num }));
       setMyBonds(bonds);
+      setFilenames(prev => ({ ...prev, myBonds: file.name }));
       setUploadStatus(prev => ({ ...prev, myBonds: true }));
-      setMatches([]); // Clear previous matches
+      setMatches([]);
     } catch (error) {
       console.error('Error parsing my bonds file:', error);
       alert('Error reading file. Please ensure it\'s a valid Excel or CSV file.');
@@ -144,22 +174,20 @@ export default function Home() {
       let numbers: string[];
 
       if (fileExtension === 'txt') {
-        // Parse text file and extract 6-digit numbers
         numbers = await parseTextFile(file);
       } else {
-        // Parse Excel/CSV files
         numbers = await parseFile(file);
       }
 
-      // Create winning bonds array with prize information
       const bonds: WinningBond[] = numbers.map((num) => ({
         number: num,
-        prize: 'Prize Winner' // You can customize this based on your needs
+        prize: 'Prize Winner'
       }));
 
       setWinningBonds(bonds);
+      setFilenames(prev => ({ ...prev, winningBonds: file.name }));
       setUploadStatus(prev => ({ ...prev, winningBonds: true }));
-      setMatches([]); // Clear previous matches
+      setMatches([]);
     } catch (error) {
       console.error('Error parsing winning bonds file:', error);
       alert('Error reading file. Please ensure it\'s a valid text, Excel, or CSV file.');
@@ -221,6 +249,39 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        {/* Stats Dashboard */}
+        {(uploadStatus.myBonds || uploadStatus.winningBonds) && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12 animate-fadeIn">
+            <div className="bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
+              <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-1">Total My Bonds</p>
+              <div className="flex items-end justify-between">
+                <h3 className="text-3xl font-bold text-gray-900 dark:text-white">{myBonds.length}</h3>
+                <span className="text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 px-2 py-1 rounded-md">
+                  {filenames.myBonds.slice(0, 15)}...
+                </span>
+              </div>
+            </div>
+            <div className="bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
+              <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-1">Winning Numbers</p>
+              <div className="flex items-end justify-between">
+                <h3 className="text-3xl font-bold text-gray-900 dark:text-white">{winningBonds.length}</h3>
+                <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-2 py-1 rounded-md">
+                  {filenames.winningBonds.slice(0, 15)}...
+                </span>
+              </div>
+            </div>
+            <div className="bg-white/50 dark:bg-gray-800/50 backdrop-blur-sm p-6 rounded-2xl border border-gray-100 dark:border-gray-700 shadow-sm">
+              <p className="text-sm text-gray-500 dark:text-gray-400 font-medium mb-1">Detected Denom</p>
+              <div className="flex items-end justify-between">
+                <h3 className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">Rs. {detectedDenom}</h3>
+                <span className="text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 px-2 py-1 rounded-md">
+                  Smart Detect
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Sample Templates Section */}
         <div className="mb-12 bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-900/20 dark:to-pink-900/20 rounded-2xl p-8 border border-purple-100 dark:border-purple-800">
           <div className="flex items-start justify-between flex-wrap gap-6">
@@ -562,6 +623,15 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
+                <button
+                  onClick={exportToCSV}
+                  className="flex items-center space-x-2 px-6 py-3 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 font-semibold rounded-xl hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-all duration-300 border border-emerald-200 dark:border-emerald-800"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  <span>Download Results (CSV)</span>
+                </button>
               </div>
 
               <div className="space-y-4">
